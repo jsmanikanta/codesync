@@ -23,8 +23,18 @@ app.use(cors(corsOptions));
 app.use(express.json());
 
 const io = new Server(server, {
-  cors: corsOptions,
+  cors: {
+    origin: FRONTEND_URL,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
   transports: ["polling", "websocket"],
+});
+io.engine.on("connection_error", (err) => {
+  console.log("Socket connection error:");
+  console.log("Message:", err.message);
+  console.log("Code:", err.code);
+  console.log("Context:", err.context);
 });
 
 app.use("/api/code", codeRoutes);
