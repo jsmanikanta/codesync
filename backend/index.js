@@ -1,35 +1,46 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-dotenv.config();
 import http from "http";
 import { Server } from "socket.io";
+
 import ACTIONS from "./action.js";
 import codeRoutes from "./routes/codeRoutes.js";
 
+dotenv.config();
+
 const app = express();
 const server = http.createServer(app);
+
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
+const corsOptions = {
+  origin: FRONTEND_URL,
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.use(express.json());
+
 const io = new Server(server, {
-  cors: {
-    origin: process.env.FRONTEND_URL,
-    credentials: true,
-  },
+  cors: corsOptions,
+  transports: ["polling", "websocket"],
 });
 
-const port = process.env.PORT;
-app.use(express.json());
-app.use(
-  cors({
-    origin: process.env.FRONTEND_URL,
-    credentials: true,
-  }),
-);
 app.use("/api/code", codeRoutes);
+
+app.get("/", (req, res) => {
+  res.status(200).json({
+    message: "Collaborative Editor Backend Running.",
+  });
+});
 
 const userSocketMap = {};
 
 function getAllConnectedClients(roomId) {
-  return [...(io.sockets.adapter.rooms.get(roomId) || [])].map((socketId) => ({
+  const clients = io.sockets.adapter.rooms.get(roomId) || [];
+
+  return [...clients].map((socketId) => ({
     socketId,
     username: userSocketMap[socketId],
   }));
@@ -39,38 +50,61 @@ io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
 
   socket.on(ACTIONS.JOIN, ({ roomId, newuser }) => {
+    if (!roomId || !newuser) return;
+
     userSocketMap[socket.id] = newuser;
+
     socket.join(roomId);
 
     const clients = getAllConnectedClients(roomId);
 
-    // Notify existing users that someone joined
     io.to(roomId).emit(ACTIONS.JOINED, {
       clients,
       newuser,
       socketId: socket.id,
     });
+
+    console.log(`${newuser} joined room ${roomId}`);
   });
 
   socket.on(ACTIONS.CODE_CHANGE, ({ roomId, code }) => {
-    socket.to(roomId).emit(ACTIONS.CODE_CHANGE, { code });
+    if (!roomId) return;
+
+    socket.to(roomId).emit(ACTIONS.CODE_CHANGE, {
+      code,
+    });
   });
 
   socket.on(ACTIONS.LANGUAGE_CHANGE, ({ roomId, language }) => {
-    socket.to(roomId).emit(ACTIONS.LANGUAGE_CHANGE, { language });
+    if (!roomId) return;
+
+    socket.to(roomId).emit(ACTIONS.LANGUAGE_CHANGE, {
+      language,
+    });
   });
 
   socket.on(ACTIONS.CHAT_MESSAGE, ({ roomId, message }) => {
-    if (!roomId || !message?.id || !message.message) return;
-    socket.to(roomId).emit(ACTIONS.CHAT_MESSAGE, { roomId, message });
+    if (!roomId || !message?.id || !message?.message) {
+      return;
+    }
+
+    socket.to(roomId).emit(ACTIONS.CHAT_MESSAGE, {
+      roomId,
+      message,
+    });
   });
 
   socket.on(ACTIONS.SYNC_CODE, ({ socketId, code }) => {
-    io.to(socketId).emit(ACTIONS.CODE_CHANGE, { code });
+    if (!socketId) return;
+
+    io.to(socketId).emit(ACTIONS.CODE_CHANGE, {
+      code,
+    });
   });
 
   socket.on("disconnecting", () => {
     const rooms = [...socket.rooms];
+
     rooms.forEach((roomId) => {
       socket.to(roomId).emit(ACTIONS.DISCONNECTED, {
         socketId: socket.id,
@@ -79,14 +113,13 @@ io.on("connection", (socket) => {
     });
 
     delete userSocketMap[socket.id];
-    socket.leave();
+
+    console.log("Socket disconnected:", socket.id);
   });
 });
 
-app.get("/", (req, res) => {
-  res.send("Collaborative Editor Backend Running.");
-});
+const PORT = process.env.PORT || 9000;
 
-server.listen(port, () =>
-  console.log(`Server running at http://localhost:${port}`),
-);
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
